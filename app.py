@@ -1,5 +1,7 @@
 import io
 import json
+import base64
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import cv2
@@ -90,6 +92,148 @@ def _scale_click_to_native(click: dict, native_w: int, native_h: int):
     sx = native_w / disp_w
     sy = native_h / disp_h
     return click["x"] * sx, click["y"] * sy
+
+
+def _np_img_to_data_uri(img_array: np.ndarray, max_width: int = 500) -> str:
+    """Encode a numpy image (grayscale or RGB) as an inline base64 PNG data
+    URI, downscaled to max_width if larger -- keeps the report file size
+    reasonable and avoids shipping more pixels than a printed/viewed report
+    can usefully show."""
+    pil_img = Image.fromarray(img_array)
+    if pil_img.width > max_width:
+        ratio = max_width / pil_img.width
+        pil_img = pil_img.resize((max_width, max(1, int(pil_img.height * ratio))))
+    buf = io.BytesIO()
+    pil_img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
+def _fig_to_data_uri(fig) -> str:
+    """Encode a matplotlib figure as an inline base64 PNG data URI."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
+def generate_html_report(
+    gray_img, enhanced_img, overlay_img, side_color_img,
+    area_hist_fig, sides_hist_fig, stats, um_per_px, chosen_profile,
+    native_w, native_h, crop_left, crop_top, crop_right, crop_bottom,
+) -> str:
+    """Build a single self-contained HTML report (all images inlined as
+    base64 data URIs) summarizing one analysis run -- meant to be handed
+    out or archived as a standalone file, independent of the running app."""
+    generated_at = datetime.now().strftime("%d.%m.%Y. %H:%M")
+    profile_label = chosen_profile.name if chosen_profile else "(ručni unos µm/px)"
+    crop_w_mm = (crop_right - crop_left) * um_per_px / 1000.0
+    crop_h_mm = (crop_bottom - crop_top) * um_per_px / 1000.0
+
+    gray_uri = _np_img_to_data_uri(gray_img)
+    enhanced_uri = _np_img_to_data_uri(enhanced_img)
+    overlay_uri = _np_img_to_data_uri(overlay_img)
+    side_color_uri = _np_img_to_data_uri(side_color_img) if side_color_img is not None else None
+    area_hist_uri = _fig_to_data_uri(area_hist_fig)
+    sides_hist_uri = _fig_to_data_uri(sides_hist_fig)
+
+    warning_html = ""
+    if stats.n_cells < 50:
+        warning_html = f"""
+        <div class="warning">
+          ⚠️ Analizirano je samo {stats.n_cells} stanica. Pouzdana klinička
+          morfometrija endotela obično zahtijeva ≥ 75–100 stanica — brojke
+          u ovom izvještaju treba smatrati orijentacijskima.
+        </div>"""
+
+    side_color_html = ""
+    if side_color_uri:
+        side_color_html = f"""
+        <figure>
+          <img src="{side_color_uri}" alt="Mapa stanica po broju stranica">
+          <figcaption>Mapa stanica obojena po broju stranica (zeleno = heksagon / 6 stranica)</figcaption>
+        </figure>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="hr">
+<head>
+<meta charset="utf-8">
+<title>Izvještaj analize endotela — {generated_at}</title>
+<style>
+  body {{ font-family: -apple-system, "Segoe UI", Arial, sans-serif; max-width: 900px;
+         margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; line-height: 1.5; }}
+  h1 {{ font-size: 1.4rem; margin-bottom: 0.2rem; }}
+  h2 {{ font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 0.3rem; }}
+  .subtitle {{ color: #666; margin-top: 0; }}
+  .warning {{ background: #fff4e5; border: 1px solid #f0b429; border-radius: 6px;
+              padding: 0.7rem 1rem; margin: 1rem 0; }}
+  .disclaimer {{ background: #f5f5f5; border-radius: 6px; padding: 0.8rem 1rem;
+                 font-size: 0.85rem; color: #444; margin-top: 2.5rem; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 0.5rem 0; }}
+  td, th {{ text-align: left; padding: 0.35rem 0.7rem; border-bottom: 1px solid #eee; font-size: 0.95rem; }}
+  th {{ color: #555; font-weight: 600; width: 45%; }}
+  .metrics {{ display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }}
+  .metric-box {{ background: #f7f8fa; border-radius: 8px; padding: 0.8rem 1.1rem; min-width: 130px; }}
+  .metric-box .value {{ font-size: 1.5rem; font-weight: 700; }}
+  .metric-box .label {{ font-size: 0.8rem; color: #666; }}
+  .gallery {{ display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }}
+  figure {{ margin: 0; max-width: 420px; }}
+  figure img {{ max-width: 100%; border: 1px solid #ddd; border-radius: 4px; display: block; }}
+  figcaption {{ font-size: 0.8rem; color: #555; margin-top: 0.3rem; }}
+  @media print {{ body {{ margin: 0.5rem auto; }} }}
+</style>
+</head>
+<body>
+  <h1>🔬 Izvještaj analize korneal. endotela</h1>
+  <p class="subtitle">Generirano: {generated_at} · istraživački/edukativni prototip, nije klinički validiran medicinski uređaj</p>
+
+  {warning_html}
+
+  <h2>Metrika</h2>
+  <div class="metrics">
+    <div class="metric-box"><div class="value">{stats.n_cells}</div><div class="label">Broj analiziranih stanica</div></div>
+    <div class="metric-box"><div class="value">{stats.ecd:,.0f}</div><div class="label">ECD (stanica/mm²)</div></div>
+    <div class="metric-box"><div class="value">{stats.mean_area:,.1f}</div><div class="label">Prosj. površina (µm²)</div></div>
+    <div class="metric-box"><div class="value">{stats.cv_percent:,.1f}%</div><div class="label">CV % (polimegatizam)</div></div>
+    <div class="metric-box"><div class="value">{stats.hex_percent:,.1f}%</div><div class="label">HEX % (heksagonalnost)</div></div>
+  </div>
+  <table>
+    <tr><th>Min. / maks. površina stanice</th><td>{stats.min_area:,.1f} / {stats.max_area:,.1f} µm²</td></tr>
+    <tr><th>Analizirana površina</th><td>{stats.analyzed_area_mm2:,.4f} mm²</td></tr>
+  </table>
+
+  <h2>Kalibracija i odabrano područje</h2>
+  <table>
+    <tr><th>Kalibracijski profil</th><td>{profile_label}</td></tr>
+    <tr><th>µm/piksel</th><td>{um_per_px:.4f}</td></tr>
+    <tr><th>Rezolucija cijele slike</th><td>{native_w}×{native_h} px</td></tr>
+    <tr><th>Odabrano područje (crop)</th><td>({crop_left}, {crop_top}) – ({crop_right}, {crop_bottom}) px,
+        {crop_right - crop_left}×{crop_bottom - crop_top} px ≈ {crop_w_mm:.2f}×{crop_h_mm:.2f} mm</td></tr>
+  </table>
+
+  <h2>Slike</h2>
+  <div class="gallery">
+    <figure><img src="{gray_uri}" alt="Odabrano područje"><figcaption>Odabrano područje (grayscale)</figcaption></figure>
+    <figure><img src="{enhanced_uri}" alt="Nakon predobrade"><figcaption>Nakon predobrade (CLAHE + normalizacija)</figcaption></figure>
+    <figure><img src="{overlay_uri}" alt="Segmentirane granice"><figcaption>Segmentirane granice stanica</figcaption></figure>
+    {side_color_html}
+  </div>
+
+  <h2>Raspodjele</h2>
+  <div class="gallery">
+    <figure><img src="{area_hist_uri}" alt="Raspodjela površina"><figcaption>Raspodjela površina stanica</figcaption></figure>
+    <figure><img src="{sides_hist_uri}" alt="Raspodjela broja stranica"><figcaption>Raspodjela broja stranica (pleomorfizam)</figcaption></figure>
+  </div>
+
+  <div class="disclaimer">
+    Ovo je istraživački/edukativni prototip, nije klinički validiran medicinski uređaj.
+    Kvaliteta segmentacije ovisi o kontrastu/oštrini/rasvjeti izvorne slike. Broj
+    "stranica" stanice (za HEX%) procjenjuje se preko broja susjednih stanica u
+    mozaiku, kao praktična zamjena za "triple-point" metodu iz literature. Za
+    pouzdanu morfometriju obično je potrebno ≥ 75–100 analiziranih stanica.
+  </div>
+</body>
+</html>"""
 
 
 # ---------------------------------------------------------------- sidebar --
@@ -610,8 +754,8 @@ with colB:
         ax2.axvline(6, color="gray", linestyle="--", linewidth=1)
     st.pyplot(fig2, width="stretch")
 
-if show_side_colors and stats.n_cells > 0:
-    st.markdown("**Mapa stanica obojena po broju stranica** (zeleno = heksagon / 6 stranica)")
+colored = None
+if stats.n_cells > 0:
     side_color_map = {3: (200, 50, 50), 4: (230, 140, 40), 5: (230, 210, 40),
                        6: (60, 180, 75), 7: (60, 140, 220), 8: (140, 60, 200)}
     colored = np.zeros((*stats.labels_img.shape, 3), dtype=np.uint8)
@@ -622,7 +766,15 @@ if show_side_colors and stats.n_cells > 0:
         color = side_color_map.get(n_sides, (140, 140, 140))
         colored[stats.labels_img == lbl] = color
     colored[stats.boundaries] = [0, 0, 0]
-    st.image(colored, width="stretch")
+    # colored is also embedded in the HTML report below regardless of
+    # show_side_colors, so the report stays complete even if this on-screen
+    # preview is hidden.
+    if show_side_colors:
+        st.markdown("**Mapa stanica obojena po broju stranica** (zeleno = heksagon / 6 stranica)")
+        # Same reasoning as crop_disp_width above: don't force-stretch a
+        # small crop's map to fill the full page width, which blows it up
+        # and makes it look blurrier than the actual pixel data.
+        st.image(colored, width=crop_disp_width)
 
 st.divider()
 st.subheader("⬇️ Izvoz rezultata")
@@ -656,7 +808,7 @@ if stats.n_cells > 0:
     }])
     summary_csv = summary.to_csv(index=False).encode("utf-8")
 
-    dl1, dl2, dl3 = st.columns(3)
+    dl1, dl2, dl3, dl4 = st.columns(4)
     dl1.download_button("Preuzmi CSV po stanicama", csv_bytes, "cell_data.csv", "text/csv")
     dl2.download_button("Preuzmi sažetak (CSV)", summary_csv, "summary.csv", "text/csv")
 
@@ -664,5 +816,20 @@ if stats.n_cells > 0:
     buf = io.BytesIO()
     overlay_png.save(buf, format="PNG")
     dl3.download_button("Preuzmi sliku s granicama (PNG)", buf.getvalue(), "overlay.png", "image/png")
+
+    report_html = generate_html_report(
+        gray_img=gray, enhanced_img=enhanced, overlay_img=overlay, side_color_img=colored,
+        area_hist_fig=fig, sides_hist_fig=fig2, stats=stats, um_per_px=um_per_px,
+        chosen_profile=chosen_profile, native_w=native_w, native_h=native_h,
+        crop_left=crop_left, crop_top=crop_top, crop_right=crop_right, crop_bottom=crop_bottom,
+    )
+    dl4.download_button(
+        "📄 Preuzmi HTML izvještaj", report_html, "izvjestaj_endotel.html", "text/html"
+    )
+    st.caption(
+        "HTML izvještaj je samostalna datoteka (sve slike su ugrađene) — "
+        "može se otvoriti u bilo kojem pregledniku, ispisati ili poslati dalje, "
+        "bez potrebe za ovom aplikacijom."
+    )
 else:
     st.info("Nema detektiranih stanica za izvoz - prilagodite parametre segmentacije.")

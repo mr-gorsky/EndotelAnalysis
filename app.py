@@ -141,9 +141,13 @@ def generate_html_report(
     if stats.n_cells < 50:
         warning_html = f"""
         <div class="warning">
-          ⚠️ Analizirano je samo {stats.n_cells} stanica. Pouzdana klinička
-          morfometrija endotela obično zahtijeva ≥ 75–100 stanica — brojke
-          u ovom izvještaju treba smatrati orijentacijskima.
+          ℹ️ Analizirano je {stats.n_cells} stanica. Klinička literatura često
+          navodi ≥75–100 stanica kao prag za pouzdanu morfometriju, no to je
+          uglavnom ostvarivo namjenskim specular mikroskopom ili vrlo pažljivo
+          optimiziranom tehnikom slit-lampe — uobičajene specular fotografije
+          (npr. iz literature/udžbenika) tipično pokažu i manje od 50. Manji
+          broj stanica ovdje ne znači nužno grešku — brojke u ovom izvještaju
+          treba smatrati orijentacijskima.
         </div>"""
 
     side_color_html = ""
@@ -740,11 +744,19 @@ if chosen_profile is None:
                "kalibraciju ravnalom iznad.")
 
 if stats.n_cells < 50:
-    st.warning(
-        f"Analizirano je samo **{stats.n_cells}** stanica. Pouzdana klinička "
-        "morfometrija endotela obično zahtijeva ≥ 75–100 stanica — smatrajte "
-        "ove brojke orijentacijskima i pokušajte poboljšati kontrast/kvalitetu "
-        "slike, prilagoditi parametre segmentacije, ili odabrati veće područje."
+    st.info(
+        f"Analizirano je **{stats.n_cells}** stanica. Klinička literatura "
+        "često navodi ≥75–100 stanica kao prag za pouzdanu morfometriju, ali "
+        "to je uglavnom ostvarivo namjenskim specular mikroskopom (npr. "
+        "Konan/Topcon) ili vrlo pažljivo optimiziranom tehnikom slit-lampe "
+        "(uska zraka, precizan kut, velika stabilnost) — rad na kojem se "
+        "ovaj alat temelji je s takvom tehnikom u prosjeku dobio ~185 "
+        "stanica po slici, dok obične specular fotografije (kakve se nalaze "
+        "u literaturi/udžbenicima) tipično pokažu i manje od 50. Manji broj "
+        "stanica ovdje ne znači nužno grešku u tehnici ili postavkama — "
+        "samo tretiraj rezultate kao orijentacijske, ne apsolutne. Ako želiš "
+        "probati poboljšati broj: širi/oštriji kadar oko refleksa, bolji "
+        "fokus, ili uključi 'Pojačaj slabe/mutne rubove' u izborniku."
     )
 
 st.divider()

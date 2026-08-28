@@ -668,6 +668,21 @@ min_signal_level = st.sidebar.slider(
          "lažne 'stanice'. Povećaj ako i dalje vidiš lažne detekcije u tamnom "
          "dijelu slike; smanji na 0 da isključiš ovaj filter."
 )
+use_directional_filter = st.sidebar.checkbox(
+    "Pojačaj slabe/mutne rubove stanica (usmjereni filtri, eksperimentalno)",
+    value=False,
+    help="Dodatni korak nadahnut pristupom iz TVST 2021 rada o pametnim "
+         "telefonima za endotel — banka od 4 usmjerena filtra (0°/45°/90°/135°) "
+         "pronalazi granice stanica bez obzira na smjer pružanja, što obično "
+         "izvuče slabe/zamućene rubove bolje nego samo CLAHE. Korisno kod "
+         "mutnijih/slabije fokusiranih slika; kod već oštrih slika obično nije "
+         "potrebno."
+)
+directional_filter_strength = 0.6
+if use_directional_filter:
+    directional_filter_strength = st.sidebar.slider(
+        "Jačina pojačanja rubova", 0.0, 2.0, 0.6, 0.1
+    )
 
 
 st.sidebar.header("4. Prikaz")
@@ -683,6 +698,8 @@ params = PipelineParams(
     min_marker_distance=min_marker_distance,
     exclude_border_cells=exclude_border,
     min_signal_level=min_signal_level,
+    use_directional_filter=use_directional_filter,
+    directional_filter_strength=directional_filter_strength,
     um_per_px=um_per_px,
 )
 
@@ -805,6 +822,8 @@ if stats.n_cells > 0:
         "crop_right_px": crop_right,
         "crop_bottom_px": crop_bottom,
         "analyzed_area_mm2": stats.analyzed_area_mm2,
+        "directional_filter_used": use_directional_filter,
+        "directional_filter_strength": directional_filter_strength if use_directional_filter else 0.0,
     }])
     summary_csv = summary.to_csv(index=False).encode("utf-8")
 

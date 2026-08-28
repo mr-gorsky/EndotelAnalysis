@@ -79,25 +79,11 @@ def _profile_by_label(label):
     return None
 
 
-def _scale_drag_to_native(drag: dict, native_w: int, native_h: int):
-    """streamlit_image_coordinates returns click/drag coords in the
+def _scale_click_to_native(click: dict, native_w: int, native_h: int):
+    """streamlit_image_coordinates returns click coordinates in the
     *displayed* (possibly resized) image's pixel space, plus the displayed
     element's width/height -- convert back to the original image's pixel
     coordinates."""
-    disp_w = drag.get("width") or native_w
-    disp_h = drag.get("height") or native_h
-    sx = native_w / disp_w
-    sy = native_h / disp_h
-    x1 = drag["x1"] * sx
-    y1 = drag["y1"] * sy
-    x2 = drag["x2"] * sx
-    y2 = drag["y2"] * sy
-    return x1, y1, x2, y2
-
-
-def _scale_click_to_native(click: dict, native_w: int, native_h: int):
-    """Same idea as _scale_drag_to_native, for a plain (non-drag) single
-    click event, whose keys are 'x'/'y' rather than 'x1'/'y1'/'x2'/'y2'."""
     disp_w = click.get("width") or native_w
     disp_h = click.get("height") or native_h
     sx = native_w / disp_w
@@ -321,24 +307,40 @@ with st.expander("🔧 Kalibracija ravnalom / mjernom pločicom (ako ne znaš µ
             )
 
             if calib_mode == "Linija (2 točke)":
-                st.caption("Povuci (klikni i povuci) liniju preko poznate udaljenosti:")
-                drag = streamlit_image_coordinates(
-                    calib_arr, width=disp_width, key="ruler_drag", click_and_drag=True
-                )
+                # Two separate clicks (first point, then second point)
+                # rather than a mouse drag -- see the crop tool's comment
+                # further down for why click_and_drag is unreliable (it
+                # loses the release event if the pointer leaves the
+                # component's iframe mid-drag, which is easy to do when
+                # dragging across a wide image).
+                st.session_state.setdefault("ruler_click_count", 0)
+                next_point = "prvu" if st.session_state["ruler_click_count"] == 0 else "drugu"
+                if st.session_state["ruler_click_count"] < 2:
+                    st.info(f"Klikni **{next_point} točku** poznate udaljenosti.")
+                else:
+                    st.caption("Obje točke postavljene. Klikni ponovno da započneš novo mjerenje, ili uredi brojeve ispod.")
 
-                if drag is not None and drag != st.session_state.get("_last_ruler_drag"):
+                ruler_click = streamlit_image_coordinates(calib_arr, width=disp_width, key="ruler_click")
+                if ruler_click is not None and ruler_click != st.session_state.get("_last_ruler_click"):
                     # No st.rerun(): the component's value changing already
                     # triggered this run automatically, and session_state set
                     # here is picked up by the number_inputs created just
                     # below in this same pass. An extra rerun() would abort
                     # before reaching later widgets and reset their state
                     # (see the note by the crop tool for the full story).
-                    st.session_state["_last_ruler_drag"] = drag
-                    x1, y1, x2, y2 = _scale_drag_to_native(drag, calib_w, calib_h)
-                    st.session_state["ruler_x1"] = float(x1)
-                    st.session_state["ruler_y1"] = float(y1)
-                    st.session_state["ruler_x2"] = float(x2)
-                    st.session_state["ruler_y2"] = float(y2)
+                    st.session_state["_last_ruler_click"] = ruler_click
+                    cx, cy = _scale_click_to_native(ruler_click, calib_w, calib_h)
+                    count = st.session_state["ruler_click_count"]
+                    if count >= 2:
+                        count = 0  # a click after a completed pair starts a fresh measurement
+                    if count == 0:
+                        st.session_state["ruler_x1"] = float(cx)
+                        st.session_state["ruler_y1"] = float(cy)
+                        st.session_state["ruler_click_count"] = 1
+                    else:
+                        st.session_state["ruler_x2"] = float(cx)
+                        st.session_state["ruler_y2"] = float(cy)
+                        st.session_state["ruler_click_count"] = 2
 
                 st.session_state.setdefault("ruler_x1", 0.0)
                 st.session_state.setdefault("ruler_y1", 0.0)
@@ -487,24 +489,48 @@ if st.session_state.get("_crop_native_size") != (native_w, native_h):
     st.session_state["crop_top"] = 0
     st.session_state["crop_right"] = native_w
     st.session_state["crop_bottom"] = native_h
+    st.session_state["crop_click_count"] = 0
 
 disp_width = min(800, native_w)
-crop_drag = streamlit_image_coordinates(
-    gray_full, width=disp_width, key="crop_drag", click_and_drag=True
-)
-if crop_drag is not None and crop_drag != st.session_state.get("_last_crop_drag"):
-    # No st.rerun() here -- see the note on the ruler tool's drag handler
+
+# Two separate clicks (top-left corner, then bottom-right corner) instead
+# of a mouse drag: streamlit_image_coordinates' click_and_drag mode tracks
+# the mouse-up event on the component's OWN iframe window, so if the
+# pointer leaves that iframe at any point during a drag (very easy to do
+# when dragging across a wide image, or on a trackpad) the release is
+# never seen and nothing happens -- which is exactly the "crop doesn't
+# work" symptom. A single click's press+release both land on the same
+# spot inside the iframe, so it doesn't have that failure mode.
+st.session_state.setdefault("crop_click_count", 0)
+next_corner = "gornji-lijevi" if st.session_state["crop_click_count"] == 0 else "donji-desni"
+if st.session_state["crop_click_count"] < 2:
+    st.info(f"Klikni **{next_corner} kut** područja koje želiš analizirati.")
+else:
+    st.caption("Oba kuta postavljena. Klikni ponovno bilo gdje da započneš novi odabir, ili uredi brojeve ispod.")
+
+crop_click = streamlit_image_coordinates(gray_full, width=disp_width, key="crop_click")
+if crop_click is not None and crop_click != st.session_state.get("_last_crop_click"):
+    # No st.rerun() here -- see the note on the ruler tool's click handler
     # above for why: the component value change already triggered this
     # run, and the crop_* number_inputs created just below in this same
     # pass will pick up the values set here directly.
-    st.session_state["_last_crop_drag"] = crop_drag
-    x1, y1, x2, y2 = _scale_drag_to_native(crop_drag, native_w, native_h)
-    left, right = sorted([x1, x2])
-    top, bottom = sorted([y1, y2])
-    st.session_state["crop_left"] = int(max(0, left))
-    st.session_state["crop_top"] = int(max(0, top))
-    st.session_state["crop_right"] = int(min(native_w, right))
-    st.session_state["crop_bottom"] = int(min(native_h, bottom))
+    st.session_state["_last_crop_click"] = crop_click
+    cx, cy = _scale_click_to_native(crop_click, native_w, native_h)
+    count = st.session_state["crop_click_count"]
+    if count >= 2:
+        count = 0  # a click after a completed pair starts a fresh selection
+    if count == 0:
+        st.session_state["crop_left"] = int(cx)
+        st.session_state["crop_top"] = int(cy)
+        # keep the previous opposite corner so a visible (non-empty) box
+        # shows immediately after just one click, instead of collapsing
+        # to a single point
+        st.session_state["crop_click_count"] = 1
+    else:
+        st.session_state["crop_right"] = int(cx)
+        st.session_state["crop_bottom"] = int(cy)
+        st.session_state["crop_click_count"] = 2
+
 
 def _reset_crop():
     # Runs as an on_click callback, i.e. BEFORE the script body below
@@ -516,6 +542,7 @@ def _reset_crop():
     st.session_state["crop_top"] = 0
     st.session_state["crop_right"] = native_w
     st.session_state["crop_bottom"] = native_h
+    st.session_state["crop_click_count"] = 0
 
 
 cc1, cc2, cc3, cc4, cc5 = st.columns([1, 1, 1, 1, 1])
@@ -532,7 +559,7 @@ crop_bottom = max(crop_bottom, crop_top + 1)
 
 preview_full = cv2.cvtColor(gray_full, cv2.COLOR_GRAY2RGB)
 cv2.rectangle(preview_full, (crop_left, crop_top), (crop_right, crop_bottom), (255, 60, 60), max(1, native_w // 300))
-st.image(preview_full, caption="Pregled odabranog područja (crveni okvir) — povuci gore ili uredi brojeve", width=disp_width)
+st.image(preview_full, caption="Pregled odabranog područja (crveni okvir) — klikni gore ili uredi brojeve", width=disp_width)
 
 gray = gray_full[crop_top:crop_bottom, crop_left:crop_right]
 crop_w_mm = (crop_right - crop_left) * um_per_px / 1000.0
